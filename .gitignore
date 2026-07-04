@@ -1,0 +1,5 @@
+# Player save data — everyone starts at 0
+high_score.txt
+
+# Python's machine-generated cache
+__pycache__/
