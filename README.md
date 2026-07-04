@@ -6,7 +6,14 @@ libraries to install), starring a small orange square with places to be.
 Built from scratch as my first real project, pair-programming with Claude —
 every line explained before it was written.
 
-## Play
+## Play in your browser
+
+Open `index.html` — or play it live once GitHub Pages is enabled:
+`https://YOUR-USERNAME.github.io/Claude_test/`
+
+Works on phones too: tap to jump.
+
+## Play the Python original
 
 ```
 python3 claude_dash.py

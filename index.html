@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Dash</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #1a1a2e; min-height: 100%; }
+  body { display: flex; flex-direction: column; align-items: center;
+         font-family: Arial, sans-serif; color: #ccc; }
+  h1 { margin: 18px 0 4px; color: #DA7756; font-size: 28px; }
+  p.hint { margin: 0 0 12px; font-size: 14px; }
+  canvas { max-width: 96vw; height: auto; border-radius: 6px;
+           touch-action: manipulation; }
+</style>
+</head>
+<body>
+<h1>Claude Dash</h1>
+<p class="hint">Space / tap — jump &nbsp;·&nbsp; R / tap — retry</p>
+<canvas id="game" width="800" height="400"></canvas>
+
+<script>
+// Claude Dash — browser port of claude_dash.py.
+// Same constants, same names, same physics — only the language changed.
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const GROUND_Y = 320;
+const GRAVITY = 1;
+const JUMP_VELOCITY = -15;
+const AIR_FRAMES = 2 * Math.abs(JUMP_VELOCITY) - 1;   // = 29, the spacing yardstick
+
+const SPIKE_SIZE = 30;
+const SPIKE_COLOR = "#e0455f";
+const BASE_SPEED = 6;
+const LEDGE_Y = 240;
+const LEDGE_THICK = 12;
+const LEDGE_LEN = 180;
+const LEDGE_COLOR = "#8888a0";
+
+const DAY   = { bg: "white",   ink: "black", star: "#aaaaaa" };
+const NIGHT = { bg: "#12122b", ink: "white", star: "#ffffff" };
+
+// Stars: fixed positions picked once, like the Python version
+const stars = [];
+for (let i = 0; i < 22; i++) {
+  stars.push({ x: 10 + Math.random() * 780,
+               y: 15 + Math.random() * 195,
+               size: [10, 14, 18][Math.floor(Math.random() * 3)] });
+}
+
+// high_score.txt -> the browser's localStorage save slot
+let highScore = parseInt(localStorage.getItem("claudeDashHigh")) || 0;
+
+// Game state
+let playerTop, velocity, standing, score, speed, spawnTimer, night, gameOver;
+let obstacles = [];   // {kind: "ground"|"ceiling", x}
+let ledges = [];      // {x}
+
+function reset() {
+  playerTop = GROUND_Y - 30;
+  velocity = 0;
+  standing = true;
+  score = 0;
+  speed = BASE_SPEED;
+  spawnTimer = 60;
+  night = false;
+  gameOver = false;
+  obstacles = [];
+  ledges = [];
+}
+reset();
+
+// Bounding boxes, same shapes as the tkinter polygons
+function bbox(o) {
+  if (o.kind === "ground")  return { x1: o.x, y1: GROUND_Y - SPIKE_SIZE, x2: o.x + SPIKE_SIZE, y2: GROUND_Y };
+  else                      return { x1: o.x, y1: 0, x2: o.x + SPIKE_SIZE, y2: 240 };
+}
+
+function groundSpike(x)  { obstacles.push({ kind: "ground",  x }); }
+function ceilingSpike(x) { obstacles.push({ kind: "ceiling", x }); }
+function makeLedge(x)    { ledges.push({ x }); }
+
+// Identical pattern menu and unlock ladder to spawn_obstacle() in Python
+function spawnObstacle() {
+  const x = 820;
+  const jumpDist = AIR_FRAMES * speed;
+  const gap = jumpDist + 60;
+  const tight = jumpDist + 30;
+
+  let choices = ["single", "single"];
+  if (score > 300)  choices.push("double");
+  if (score > 500)  choices.push("ledge");
+  if (score > 700)  choices.push("ceiling");
+  if (score > 800)  choices.push("ledge_block");
+  if (score > 1100) choices.push("ledge_forced");
+  if (score > 1200) choices.push("triple", "ceiling");
+  if (score > 1300) choices.push("ledge_spring");
+  if (score > 1500) choices.push("ledge_leap");
+  if (score > 1600) choices.push("ledge_dive");
+  if (score > 1800) choices.push("tight_double");
+
+  const kind = choices[Math.floor(Math.random() * choices.length)];
+  let width = SPIKE_SIZE;
+
+  if (kind === "single") {
+    groundSpike(x);
+  } else if (kind === "double") {
+    groundSpike(x); groundSpike(x + gap);
+    width = gap + SPIKE_SIZE;
+  } else if (kind === "tight_double") {
+    groundSpike(x); groundSpike(x + tight);
+    width = tight + SPIKE_SIZE;
+  } else if (kind === "triple") {
+    groundSpike(x); groundSpike(x + gap); groundSpike(x + 2 * gap);
+    width = 2 * gap + SPIKE_SIZE;
+  } else if (kind === "ceiling") {
+    ceilingSpike(x);
+  } else if (kind === "ledge") {
+    makeLedge(x);
+    const sx = x + LEDGE_LEN + 10 * speed;
+    groundSpike(sx);
+    width = sx + SPIKE_SIZE - x;
+  } else if (kind === "ledge_block") {
+    makeLedge(x);
+    ceilingSpike(x + LEDGE_LEN / 2 - 15);
+    const sx = x + LEDGE_LEN + 10 * speed;
+    groundSpike(sx);
+    width = sx + SPIKE_SIZE - x;
+  } else if (kind === "ledge_forced") {
+    makeLedge(x);
+    groundSpike(x + LEDGE_LEN / 2 - 15);
+    width = LEDGE_LEN;
+  } else if (kind === "ledge_spring") {
+    makeLedge(x);
+    for (let i = 0; i < 4; i++) groundSpike(x + LEDGE_LEN + 5 + 30 * i);
+    width = LEDGE_LEN + 125;
+  } else if (kind === "ledge_leap") {
+    makeLedge(x);
+    const wx = x + LEDGE_LEN + 10 * speed;
+    groundSpike(wx); groundSpike(wx + 30);
+    width = wx + 65 - x;
+  } else if (kind === "ledge_dive") {
+    makeLedge(x);
+    const cx = x + LEDGE_LEN + 20 * speed;
+    ceilingSpike(cx);
+    const sx = cx + 30 + 10 * speed;
+    groundSpike(sx);
+    width = sx + SPIKE_SIZE - x;
+  }
+  return width;
+}
+
+function jump() {
+  if (standing) velocity = JUMP_VELOCITY;
+}
+
+function endGame() {
+  gameOver = true;
+  if (score > highScore) {
+    highScore = score;
+    localStorage.setItem("claudeDashHigh", highScore);
+  }
+}
+
+// The heartbeat — one tick = one frame of game_loop()
+function tick() {
+  if (gameOver) { draw(); return; }
+
+  score += 1;
+  speed = Math.min(BASE_SPEED + Math.floor(score / 600), 11);
+  night = Math.floor(score / 2000) % 2 === 1;
+
+  // Remember where we were BEFORE moving — ledge collisions need it
+  const prevTop = playerTop;
+  const prevBottom = prevTop + 30;
+
+  velocity += GRAVITY;
+  playerTop += velocity;
+
+  standing = false;
+  if (playerTop + 30 > GROUND_Y) {          // don't fall through the floor
+    playerTop = GROUND_Y - 30;
+    velocity = 0;
+    standing = true;
+  }
+
+  spawnTimer -= 1;
+  if (spawnTimer <= 0) {
+    const width = spawnObstacle();
+    const breather = Math.max(10, 22 - Math.floor(score / 400));
+    spawnTimer = Math.floor(width / speed) + AIR_FRAMES + breather
+               + Math.floor(Math.random() * 21);
+  }
+
+  // Ledges: solid terrain — land on top, bonk off the underside
+  for (let i = ledges.length - 1; i >= 0; i--) {
+    const L = ledges[i];
+    L.x -= speed;
+    if (L.x + LEDGE_LEN < 0) { ledges.splice(i, 1); continue; }
+    const overlapX = 100 < L.x + LEDGE_LEN && L.x < 130;
+    if (overlapX) {
+      if (velocity >= 0 && prevBottom <= LEDGE_Y && playerTop + 30 >= LEDGE_Y) {
+        playerTop = LEDGE_Y - 30;           // was above, falling: LAND
+        velocity = 0;
+        standing = true;
+      } else if (velocity < 0 && prevTop >= LEDGE_Y + LEDGE_THICK
+                 && playerTop < LEDGE_Y + LEDGE_THICK) {
+        playerTop = LEDGE_Y + LEDGE_THICK;  // was below, rising: BONK
+        velocity = 0;
+      }
+    }
+  }
+
+  // Obstacles: move, retire, and the overlap-in-both-axes collision test
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    o.x -= speed;
+    const b = bbox(o);
+    if (b.x2 < 0) { obstacles.splice(i, 1); continue; }
+    if (100 < b.x2 && b.x1 < 130 && playerTop < b.y2 && b.y1 < playerTop + 30) {
+      endGame();
+      break;
+    }
+  }
+
+  draw();
+}
+
+function draw() {
+  const theme = night ? NIGHT : DAY;
+  ctx.fillStyle = theme.bg;
+  ctx.fillRect(0, 0, 800, 400);
+
+  ctx.fillStyle = theme.star;
+  for (const s of stars) {
+    ctx.font = s.size + "px Arial";
+    ctx.fillText("*", s.x, s.y);
+  }
+
+  ctx.strokeStyle = theme.ink;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND_Y);
+  ctx.lineTo(800, GROUND_Y);
+  ctx.stroke();
+
+  ctx.fillStyle = LEDGE_COLOR;
+  for (const L of ledges) ctx.fillRect(L.x, LEDGE_Y, LEDGE_LEN, LEDGE_THICK);
+
+  ctx.fillStyle = SPIKE_COLOR;
+  for (const o of obstacles) {
+    ctx.beginPath();
+    if (o.kind === "ground") {
+      ctx.moveTo(o.x, GROUND_Y);
+      ctx.lineTo(o.x + SPIKE_SIZE, GROUND_Y);
+      ctx.lineTo(o.x + SPIKE_SIZE / 2, GROUND_Y - SPIKE_SIZE);
+    } else {
+      ctx.moveTo(o.x, 0);
+      ctx.lineTo(o.x + SPIKE_SIZE, 0);
+      ctx.lineTo(o.x + SPIKE_SIZE / 2, 240);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.fillStyle = "#DA7756";                 // Claude stays orange in both themes
+  ctx.fillRect(100, playerTop, 30, 30);
+
+  ctx.fillStyle = theme.ink;
+  ctx.font = "14px Arial";
+  ctx.textAlign = "left";
+  ctx.fillText("Score: " + score + "    High: " + highScore, 10, 22);
+
+  if (gameOver) {
+    ctx.font = "20px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("GAME OVER — score " + score + " — press R or tap to retry", 400, 160);
+    ctx.textAlign = "left";
+  }
+}
+
+// Keys for desktop, taps for phones
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space") { e.preventDefault(); gameOver ? reset() : jump(); }
+  if (e.key === "r" || e.key === "R") { if (gameOver) reset(); }
+});
+canvas.addEventListener("pointerdown", () => { gameOver ? reset() : jump(); });
+
+setInterval(tick, 20);   // root.after(20, game_loop), forever
+</script>
+</body>
+</html>
