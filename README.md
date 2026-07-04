@@ -8,8 +8,7 @@ every line explained before it was written.
 
 ## Play in your browser
 
-Open `index.html` — or play it live once GitHub Pages is enabled:
-`https://YOUR-USERNAME.github.io/Claude_test/`
+**[▶ Play it live](https://aidancoomber.github.io/Claude_test/)** — or open `index.html` locally.
 
 Works on phones too: tap to jump.
 
